@@ -4,11 +4,11 @@ CFLAGS = -std=c++17 -I$(VULKAN_SDK_PATH)/include
 
 LDFLAGS = -L$(VULKAN_SDK_PATH)/lib `pkg-config --static --libs glfw3` -lvulkan
 
-helloTriangle: main.cpp
-	@echo "Compiling Shaders: "
-	@./compile_shaders.sh
+helloTriangle: mainVK.cpp
+	# @echo "Compiling Shaders: "
+	# @./compile_shaders.sh
 	@echo "Compiling Executable: "
-	g++ $(CFLAGS) -o helloTriangle main.cpp $(LDFLAGS)
+	clang++ $(CFLAGS) -o helloTriangle mainVK.cpp $(LDFLAGS)
 
 .PHONY: test clean
 
