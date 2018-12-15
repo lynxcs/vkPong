@@ -784,6 +784,7 @@ class application {
         }
 
         void cleanupSwapchain() {
+
             for (auto framebuffer : m_swapchainFramebuffers) {
                 m_device.destroy(framebuffer);
             }
@@ -802,6 +803,8 @@ class application {
         }
 
         void cleanup() {
+            vkDeviceWaitIdle(m_device);
+
             cleanupSwapchain();
 
             for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
