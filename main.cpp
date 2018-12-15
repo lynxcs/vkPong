@@ -5,6 +5,9 @@
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
 
+#include <glm/glm.hpp>
+
+#include <array>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -99,6 +102,9 @@ class application {
         std::vector<vk::Semaphore> m_renderFinishedSemaphores;
         std::vector<vk::Fence> m_inFlightFences;
 
+        vk::Buffer m_vertexBuffer;
+        vk::DeviceMemory m_vertexBufferMemory;
+
         int m_currentFrame = 0;
 
         bool m_framebufferResized = false;
@@ -118,6 +124,41 @@ class application {
             std::vector<vk::PresentModeKHR> presentModes;
         };
 
+        struct Vertex {
+            glm::vec2 pos;
+            glm::vec3 color;
+
+            static vk::VertexInputBindingDescription getBindingDescription() {
+                vk::VertexInputBindingDescription bindingDescription = {};
+                bindingDescription.binding = 0;
+                bindingDescription.stride = sizeof(Vertex);
+                bindingDescription.inputRate = vk::VertexInputRate::eVertex;
+
+                return bindingDescription;
+            }
+
+            static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescription() {
+                std::array<vk::VertexInputAttributeDescription, 2> attributeDescriptions = {};
+                attributeDescriptions[0].binding = 0;
+                attributeDescriptions[0].location = 0;
+                attributeDescriptions[0].format = vk::Format::eR32G32Sfloat;
+                attributeDescriptions[0].offset = offsetof(Vertex, pos);
+
+                attributeDescriptions[1].binding = 0;
+                attributeDescriptions[1].location = 1;
+                attributeDescriptions[1].format = vk::Format::eR32G32B32Sfloat;
+                attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+                return attributeDescriptions;
+            }
+        };
+
+        const std::vector<Vertex> c_vertices = {
+            {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+            {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+            {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+        };
+
         static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
             auto app = reinterpret_cast<application*>(glfwGetWindowUserPointer(window));
             app->m_framebufferResized = true;
@@ -135,6 +176,7 @@ class application {
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
+            createVertexBuffer();
             createCommandBuffers();
             createSyncObjects();
         }
@@ -425,11 +467,14 @@ class application {
 
             vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
+            auto bindingDescription = Vertex::getBindingDescription();
+            auto attributeDescriptions = Vertex::getAttributeDescription();
+
             vk::PipelineVertexInputStateCreateInfo vertexInputInfo = {};
-            vertexInputInfo.vertexBindingDescriptionCount = 0;
-            vertexInputInfo.pVertexBindingDescriptions = nullptr;
-            vertexInputInfo.vertexAttributeDescriptionCount = 0;
-            vertexInputInfo.pVertexAttributeDescriptions = nullptr;
+            vertexInputInfo.vertexBindingDescriptionCount = 1;
+            vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+            vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+            vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
             vk::PipelineInputAssemblyStateCreateInfo inputAssembly = {};
             inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
@@ -531,6 +576,90 @@ class application {
             m_commandPool = m_device.createCommandPool(poolInfo, nullptr);
         }
 
+        void createVertexBuffer() {
+            using MP_FB = vk::MemoryPropertyFlagBits;
+            using BU_FB = vk::BufferUsageFlagBits;
+
+            vk::DeviceSize bufferSize = sizeof(c_vertices[0]) * c_vertices.size();
+
+            vk::Buffer stagingBuffer;
+            vk::DeviceMemory stagingBufferMemory;
+            createBuffer(bufferSize, BU_FB::eTransferSrc, MP_FB::eHostVisible | MP_FB::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+            void* data;
+            m_device.mapMemory(stagingBufferMemory, 0, bufferSize, vk::MemoryMapFlags(0), &data);
+            memcpy(data, c_vertices.data(), (size_t) bufferSize);
+            m_device.unmapMemory(stagingBufferMemory);
+
+            createBuffer(bufferSize, BU_FB::eTransferDst | BU_FB::eVertexBuffer, MP_FB::eDeviceLocal, m_vertexBuffer, m_vertexBufferMemory);
+
+            copyBuffer(stagingBuffer, m_vertexBuffer, bufferSize);
+            m_device.destroy(stagingBuffer);
+            m_device.freeMemory(stagingBufferMemory);
+        }
+
+        // Use a separate command pool? (Use CommandPool Transient bit in that case)
+        void copyBuffer(vk::Buffer f_srcBuffer, vk::Buffer f_dstBuffer, vk::DeviceSize f_size) {
+            vk::CommandBufferAllocateInfo allocInfo = {};
+            allocInfo.level = vk::CommandBufferLevel::ePrimary;
+            allocInfo.commandPool = m_commandPool;
+            allocInfo.commandBufferCount = 1;
+
+            vk::CommandBuffer commandBuffer = {};
+            commandBuffer = m_device.allocateCommandBuffers(allocInfo)[0];
+
+            vk::CommandBufferBeginInfo beginInfo = {};
+            beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+
+            commandBuffer.begin(&beginInfo);
+
+            vk::BufferCopy copyRegion = {};
+            copyRegion.size = f_size;
+            commandBuffer.copyBuffer(f_srcBuffer, f_dstBuffer, 1, &copyRegion);
+            commandBuffer.end();
+
+            vk::SubmitInfo submitInfo = {};
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &commandBuffer;
+
+            m_graphicsQueue.submit(1, &submitInfo, nullptr);
+            m_graphicsQueue.waitIdle();
+
+            m_device.freeCommandBuffers(m_commandPool, 1, &commandBuffer);
+        }
+
+        void createBuffer(vk::DeviceSize f_size, vk::BufferUsageFlags f_usage, vk::MemoryPropertyFlags f_properties, vk::Buffer& f_buffer, vk::DeviceMemory& f_bufferMemory) {
+            vk::BufferCreateInfo bufferInfo = {};
+            bufferInfo.size = f_size;
+            bufferInfo.usage = f_usage;
+            bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+            f_buffer = m_device.createBuffer(bufferInfo);
+
+            vk::MemoryRequirements memRequirements;
+            memRequirements = m_device.getBufferMemoryRequirements(f_buffer);
+
+            vk::MemoryAllocateInfo allocInfo = {};
+            allocInfo.allocationSize = memRequirements.size;
+            allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, f_properties);
+
+            f_bufferMemory = m_device.allocateMemory(allocInfo, nullptr);
+
+            m_device.bindBufferMemory(f_buffer, f_bufferMemory, 0);
+        }
+
+        uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
+            vk::PhysicalDeviceMemoryProperties memProperties;
+            memProperties = m_physicalDevice.getMemoryProperties();
+            for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+                if (typeFilter & (1 << i) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+                    return i;
+                }
+            }
+
+            throw std::runtime_error("Failed to find suitable memory type!");
+        }
+
         void createCommandBuffers() {
             m_commandBuffers.resize(m_swapchainFramebuffers.size());
 
@@ -562,7 +691,12 @@ class application {
 
                 m_commandBuffers[i].beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
                 m_commandBuffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline);
-                m_commandBuffers[i].draw(3, 1, 0, 0);
+
+                vk::Buffer vertexBuffers[] = {m_vertexBuffer};
+                vk::DeviceSize offsets[] = {0};
+                m_commandBuffers[i].bindVertexBuffers(0, 1, vertexBuffers, offsets);
+
+                m_commandBuffers[i].draw(static_cast<uint32_t>(c_vertices.size()), 1, 0, 0);
                 m_commandBuffers[i].endRenderPass();
 
                 m_commandBuffers[i].end();
@@ -806,6 +940,9 @@ class application {
             vkDeviceWaitIdle(m_device);
 
             cleanupSwapchain();
+
+            m_device.destroy(m_vertexBuffer);
+            m_device.free(m_vertexBufferMemory);
 
             for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
                 m_device.destroy(m_renderFinishedSemaphores[i]);
