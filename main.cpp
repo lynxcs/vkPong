@@ -831,6 +831,7 @@ class application {
 
             m_window = glfwCreateWindow(800, 600, "Vulkan", nullptr, nullptr);
 
+            glfwSetWindowUserPointer(m_window, this);
             glfwSetKeyCallback(m_window, key_callback);
             glfwSetFramebufferSizeCallback(m_window, framebufferResizeCallback);
         }
