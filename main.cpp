@@ -1,6 +1,6 @@
 // TODO Built-in shader compilation
-// TODO Optimize vector usage
 // TODO Use SPIRV-Reflect to fill out pipeline layout
+// TODO Use dedicated transfer queue
 
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
@@ -104,6 +104,8 @@ class application {
 
         vk::Buffer m_vertexBuffer;
         vk::DeviceMemory m_vertexBufferMemory;
+        vk::Buffer m_indexBuffer;
+        vk::DeviceMemory m_indexBufferMemory;
 
         int m_currentFrame = 0;
 
@@ -154,9 +156,15 @@ class application {
         };
 
         const std::vector<Vertex> c_vertices = {
-            {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-            {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-            {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+            {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+            {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+            {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+            {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+        };
+
+        // TODO Calculate these automatically
+        const std::vector<uint16_t> c_indices = {
+            0, 1, 2, 2, 3, 0
         };
 
         static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
@@ -177,6 +185,7 @@ class application {
             createFramebuffers();
             createCommandPool();
             createVertexBuffer();
+            createIndexBuffer();
             createCommandBuffers();
             createSyncObjects();
         }
@@ -598,6 +607,28 @@ class application {
             m_device.freeMemory(stagingBufferMemory);
         }
 
+        void createIndexBuffer() {
+            using MP_FB = vk::MemoryPropertyFlagBits;
+            using BU_FB = vk::BufferUsageFlagBits;
+
+            vk::DeviceSize bufferSize = sizeof(c_indices[0]) * c_indices.size();
+
+            vk::Buffer stagingBuffer;
+            vk::DeviceMemory stagingBufferMemory;
+            createBuffer(bufferSize, BU_FB::eTransferSrc, MP_FB::eHostVisible | MP_FB::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+            void* data;
+            m_device.mapMemory(stagingBufferMemory, 0, bufferSize, vk::MemoryMapFlags(0), &data);
+            memcpy(data, c_indices.data(), (size_t) bufferSize);
+            m_device.unmapMemory(stagingBufferMemory);
+
+            createBuffer(bufferSize, BU_FB::eTransferDst | BU_FB::eIndexBuffer, MP_FB::eDeviceLocal, m_indexBuffer, m_indexBufferMemory);
+
+            copyBuffer(stagingBuffer, m_indexBuffer, bufferSize);
+            m_device.destroy(stagingBuffer);
+            m_device.freeMemory(stagingBufferMemory);
+        }
+
         // Use a separate command pool? (Use CommandPool Transient bit in that case)
         void copyBuffer(vk::Buffer f_srcBuffer, vk::Buffer f_dstBuffer, vk::DeviceSize f_size) {
             vk::CommandBufferAllocateInfo allocInfo = {};
@@ -695,8 +726,9 @@ class application {
                 vk::Buffer vertexBuffers[] = {m_vertexBuffer};
                 vk::DeviceSize offsets[] = {0};
                 m_commandBuffers[i].bindVertexBuffers(0, 1, vertexBuffers, offsets);
+                m_commandBuffers[i].bindIndexBuffer(m_indexBuffer, 0, vk::IndexType::eUint16);
 
-                m_commandBuffers[i].draw(static_cast<uint32_t>(c_vertices.size()), 1, 0, 0);
+                m_commandBuffers[i].drawIndexed(static_cast<uint32_t>(c_indices.size()), 1, 0, 0, 0);
                 m_commandBuffers[i].endRenderPass();
 
                 m_commandBuffers[i].end();
@@ -940,6 +972,9 @@ class application {
             vkDeviceWaitIdle(m_device);
 
             cleanupSwapchain();
+
+            m_device.destroy(m_indexBuffer);
+            m_device.free(m_indexBufferMemory);
 
             m_device.destroy(m_vertexBuffer);
             m_device.free(m_vertexBufferMemory);
