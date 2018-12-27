@@ -5,7 +5,9 @@
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
 
+#define GLM_FORCE_RADIANS
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <array>
 #include <iostream>
@@ -16,6 +18,7 @@
 #include <optional>
 #include <set>
 #include <algorithm>
+#include <chrono>
 
 #ifdef NDEBUG
 const bool VALIDATION_LAYERS_ENABLED = false;
@@ -92,6 +95,10 @@ class application {
 
         vk::RenderPass m_renderPass;
 
+        vk::DescriptorSetLayout m_descriptorSetLayout;
+        vk::DescriptorPool m_descriptorPool;
+        std::vector<vk::DescriptorSet> descriptorSets;
+
         vk::PipelineLayout m_pipelineLayout;
         vk::Pipeline m_graphicsPipeline;
 
@@ -104,8 +111,13 @@ class application {
 
         vk::Buffer m_vertexBuffer;
         vk::DeviceMemory m_vertexBufferMemory;
+
         vk::Buffer m_indexBuffer;
         vk::DeviceMemory m_indexBufferMemory;
+
+        std::vector<vk::Buffer> uniformBuffers;
+        std::vector<vk::DeviceMemory> uniformBuffersMemory;
+
 
         int m_currentFrame = 0;
 
@@ -118,6 +130,12 @@ class application {
             bool isComplete() {
                 return graphicsFamily.has_value() && presentFamily.has_value();
             }
+        };
+
+        struct UniformBufferObject {
+            glm::mat4 model;
+            glm::mat4 view;
+            glm::mat4 proj;
         };
 
         struct SwapchainSupportDetails {
@@ -181,11 +199,15 @@ class application {
             createSwapchain();
             createImageViews();
             createRenderPass();
+            createDescriptorSetLayout();
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
             createVertexBuffer();
             createIndexBuffer();
+            createUniformBuffers();
+            createDescriptorPool();
+            createDescriptorSets();
             createCommandBuffers();
             createSyncObjects();
         }
@@ -454,6 +476,22 @@ class application {
             m_renderPass = m_device.createRenderPass(createInfo, nullptr);
         }
 
+        void createDescriptorSetLayout() {
+            vk::DescriptorSetLayoutBinding uboLayoutBinding = {};
+            uboLayoutBinding.binding = 0;
+            uboLayoutBinding.descriptorType = vk::DescriptorType::eUniformBuffer;
+            uboLayoutBinding.descriptorCount = 1;
+
+            uboLayoutBinding.stageFlags = vk::ShaderStageFlagBits::eVertex;
+            uboLayoutBinding.pImmutableSamplers = nullptr; // Optional
+
+            vk::DescriptorSetLayoutCreateInfo layoutInfo = {};
+            layoutInfo.bindingCount = 1;
+            layoutInfo.pBindings = &uboLayoutBinding;
+
+            m_descriptorSetLayout = m_device.createDescriptorSetLayout(layoutInfo);
+        }
+
         void createGraphicsPipeline() {
             auto vertShaderCode = readFile("shaders/vert.spv");
             auto fragShaderCode = readFile("shaders/frag.spv");
@@ -504,7 +542,7 @@ class application {
             rasterizer.polygonMode = vk::PolygonMode::eFill;
             rasterizer.lineWidth = 1.0f;
             rasterizer.cullMode = vk::CullModeFlagBits::eBack;
-            rasterizer.frontFace = vk::FrontFace::eClockwise;
+            rasterizer.frontFace = vk::FrontFace::eCounterClockwise;
 
             rasterizer.depthBiasEnable = VK_FALSE;
             rasterizer.depthBiasConstantFactor = 0.0f;
@@ -530,6 +568,8 @@ class application {
             colorBlending.pAttachments = &colorBlendAttachment;
 
             vk::PipelineLayoutCreateInfo pipelineLayoutInfo = {};
+            pipelineLayoutInfo.setLayoutCount = 1;
+            pipelineLayoutInfo.pSetLayouts = &m_descriptorSetLayout;
 
             m_pipelineLayout = m_device.createPipelineLayout(pipelineLayoutInfo, nullptr);
 
@@ -691,6 +731,65 @@ class application {
             throw std::runtime_error("Failed to find suitable memory type!");
         }
 
+        void createUniformBuffers() {
+            vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
+
+            uniformBuffers.resize(m_swapchainImages.size());
+            uniformBuffersMemory.resize(m_swapchainImages.size());
+
+            for (size_t i = 0; i < m_swapchainImages.size(); i++) {
+                createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, uniformBuffers[i], uniformBuffersMemory[i]);
+            }
+        }
+
+        void createDescriptorPool() {
+            vk::DescriptorPoolSize poolSize = {};
+            poolSize.type = vk::DescriptorType::eUniformBuffer;
+            poolSize.descriptorCount = static_cast<uint32_t>(m_swapchainImages.size());
+            
+            vk::DescriptorPoolCreateInfo poolInfo = {};
+            poolInfo.poolSizeCount = 1;
+            poolInfo.pPoolSizes = &poolSize;
+            poolInfo.maxSets = static_cast<uint32_t>(m_swapchainImages.size());
+            poolInfo.flags = vk::DescriptorPoolCreateFlags(0) ;
+
+            m_descriptorPool = m_device.createDescriptorPool(poolInfo);
+        }
+
+        void createDescriptorSets() {
+            std::vector<vk::DescriptorSetLayout> layouts(m_swapchainImages.size(), m_descriptorSetLayout);
+
+            vk::DescriptorSetAllocateInfo allocInfo = {};
+            allocInfo.descriptorPool = m_descriptorPool;
+            allocInfo.descriptorSetCount = static_cast<uint32_t>(m_swapchainImages.size());
+            allocInfo.pSetLayouts = layouts.data();
+
+            descriptorSets.resize(m_swapchainImages.size());
+            m_device.allocateDescriptorSets(&allocInfo, descriptorSets.data());
+
+            for (size_t i = 0; i < m_swapchainImages.size(); i++) {
+                vk::DescriptorBufferInfo bufferInfo = {};
+                bufferInfo.buffer = uniformBuffers[i];
+                bufferInfo.offset = 0;
+                bufferInfo.range = sizeof(UniformBufferObject);
+
+                vk::WriteDescriptorSet descriptorWrite = {};
+                descriptorWrite.dstSet = descriptorSets[i];
+                descriptorWrite.dstBinding = 0;
+                descriptorWrite.dstArrayElement = 0;
+
+                descriptorWrite.descriptorType = vk::DescriptorType::eUniformBuffer;
+                descriptorWrite.descriptorCount = 1;
+                descriptorWrite.pBufferInfo = &bufferInfo;
+
+                // Optional
+                descriptorWrite.pImageInfo = nullptr;
+                descriptorWrite.pTexelBufferView = nullptr;
+
+                m_device.updateDescriptorSets(1, &descriptorWrite, 0, nullptr);
+            }
+        }
+
         void createCommandBuffers() {
             m_commandBuffers.resize(m_swapchainFramebuffers.size());
 
@@ -727,6 +826,7 @@ class application {
                 vk::DeviceSize offsets[] = {0};
                 m_commandBuffers[i].bindVertexBuffers(0, 1, vertexBuffers, offsets);
                 m_commandBuffers[i].bindIndexBuffer(m_indexBuffer, 0, vk::IndexType::eUint16);
+                m_commandBuffers[i].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0, 1, &descriptorSets[i], 0, nullptr);
 
                 m_commandBuffers[i].drawIndexed(static_cast<uint32_t>(c_indices.size()), 1, 0, 0, 0);
                 m_commandBuffers[i].endRenderPass();
@@ -892,6 +992,8 @@ class application {
             vk::PipelineStageFlags waitStages[] = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
             vk::Semaphore signalSemaphores[] = {m_renderFinishedSemaphores[m_currentFrame]};
 
+            updateUniformBuffer(imageIndex);
+
             vk::SubmitInfo submitInfo = {};
             submitInfo.waitSemaphoreCount = 1;
             submitInfo.pWaitSemaphores = waitSemaphores;
@@ -928,6 +1030,24 @@ class application {
             }
 
             m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+        }
+
+        void updateUniformBuffer(uint32_t f_currentImage) {
+            static auto startTime = std::chrono::high_resolution_clock::now();
+
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+            UniformBufferObject ubo = {};
+            ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+            ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+            ubo.proj = glm::perspective(glm::radians(45.0f), m_swapchainExtent.width / (float) m_swapchainExtent.height, 0.1f, 10.0f);
+            ubo.proj[1][1] *= -1;
+
+            void* data;
+            m_device.mapMemory(uniformBuffersMemory[f_currentImage], 0, sizeof(ubo), vk::MemoryMapFlags(0), &data);
+            memcpy(data, &ubo, sizeof(ubo));
+            m_device.unmapMemory(uniformBuffersMemory[f_currentImage]);
         }
 
         void recreateSwapchain() {
@@ -972,6 +1092,14 @@ class application {
             vkDeviceWaitIdle(m_device);
 
             cleanupSwapchain();
+
+            m_device.destroy(m_descriptorPool);
+
+            m_device.destroy(m_descriptorSetLayout);
+            for (size_t i = 0; i < m_swapchainImages.size(); i++) {
+                m_device.destroy(uniformBuffers[i]);
+                m_device.free(uniformBuffersMemory[i]);
+            }
 
             m_device.destroy(m_indexBuffer);
             m_device.free(m_indexBufferMemory);
