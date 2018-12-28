@@ -638,7 +638,7 @@ class application {
         }
 
         // TODO: Create helper functions to record multiple commands and then flush them
-        // E.g: setupCommandBuffer() && HelperFunctions && flushSetupCommands()
+        // E.g: beginSingleTimeCommands() && HelperFunctions && flushSingleTimeCommands()
         void createTextureImage() {
             int texWidth, texHeight, texChannels;
             stbi_uc* pixels = stbi_load("textures/texture.png", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
@@ -662,15 +662,19 @@ class application {
             stbi_image_free(pixels);
 
             createImage(texWidth, texHeight, vk::Format::eR8G8B8A8Unorm, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled, vk::MemoryPropertyFlagBits::eDeviceLocal, m_textureImage, m_textureImageMemory);
-            transitionImageLayout(m_textureImage, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-            copyBufferToImage(stagingBuffer, m_textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-            transitionImageLayout(m_textureImage, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+            vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
+            transitionImageLayout(commandBuffer, m_textureImage, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+            copyBufferToImage(commandBuffer, stagingBuffer, m_textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+            transitionImageLayout(commandBuffer, m_textureImage, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+            flushSingleTimeCommands(commandBuffer);
 
             m_device.destroy(stagingBuffer);
             m_device.free(stagingBufferMemory);
         }
 
         vk::CommandBuffer beginSingleTimeCommands() {
+
             vk::CommandBufferAllocateInfo allocInfo = {};
             allocInfo.level = vk::CommandBufferLevel::ePrimary;
             allocInfo.commandPool = m_commandPool;
@@ -687,7 +691,7 @@ class application {
             return commandBuffer;
         }
 
-        void endSingleTimeCommands(vk::CommandBuffer commandBuffer) {
+        void flushSingleTimeCommands(vk::CommandBuffer commandBuffer) {
             commandBuffer.end();
 
             vk::SubmitInfo submitInfo = {};
@@ -791,7 +795,10 @@ class application {
 
             createBuffer(bufferSize, BU_FB::eTransferDst | BU_FB::eVertexBuffer, MP_FB::eDeviceLocal, m_vertexBuffer, m_vertexBufferMemory);
 
-            copyBuffer(stagingBuffer, m_vertexBuffer, bufferSize);
+            vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
+            copyBuffer(commandBuffer, stagingBuffer, m_vertexBuffer, bufferSize);
+            flushSingleTimeCommands(commandBuffer);
+
             m_device.destroy(stagingBuffer);
             m_device.freeMemory(stagingBufferMemory);
         }
@@ -813,25 +820,22 @@ class application {
 
             createBuffer(bufferSize, BU_FB::eTransferDst | BU_FB::eIndexBuffer, MP_FB::eDeviceLocal, m_indexBuffer, m_indexBufferMemory);
 
-            copyBuffer(stagingBuffer, m_indexBuffer, bufferSize);
+            vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
+            copyBuffer(commandBuffer, stagingBuffer, m_indexBuffer, bufferSize);
+            flushSingleTimeCommands(commandBuffer);
+
             m_device.destroy(stagingBuffer);
             m_device.freeMemory(stagingBufferMemory);
         }
 
         // Use a separate command pool? (Use CommandPool Transient bit in that case)
-        void copyBuffer(vk::Buffer f_srcBuffer, vk::Buffer f_dstBuffer, vk::DeviceSize f_size) {
-            vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
-
+        void copyBuffer(vk::CommandBuffer commandBuffer, vk::Buffer f_srcBuffer, vk::Buffer f_dstBuffer, vk::DeviceSize f_size) {
             vk::BufferCopy copyRegion = {};
             copyRegion.size = f_size;
             commandBuffer.copyBuffer(f_srcBuffer, f_dstBuffer, 1, &copyRegion);
-
-            endSingleTimeCommands(commandBuffer);
         }
 
-        void transitionImageLayout(vk::Image image, vk::Format format, vk::ImageLayout oldLayout, vk::ImageLayout newLayout) {
-            vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
-
+        void transitionImageLayout(vk::CommandBuffer commandBuffer, vk::Image image, vk::Format format, vk::ImageLayout oldLayout, vk::ImageLayout newLayout) {
             vk::ImageMemoryBarrier barrier = {};
             barrier.oldLayout = oldLayout;
             barrier.newLayout = newLayout;
@@ -866,13 +870,9 @@ class application {
             }
 
             commandBuffer.pipelineBarrier(sourceStage, destinationStage, vk::DependencyFlags(0) , 0, nullptr, 0, nullptr, 1, &barrier);
-
-            endSingleTimeCommands(commandBuffer);
         }
 
-        void copyBufferToImage(vk::Buffer buffer, vk::Image image, uint32_t width, uint32_t height) {
-            vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
-
+        void copyBufferToImage(vk::CommandBuffer commandBuffer, vk::Buffer buffer, vk::Image image, uint32_t width, uint32_t height) {
             vk::BufferImageCopy region = {};
             region.bufferOffset = 0;
             region.bufferRowLength = 0;
@@ -887,8 +887,6 @@ class application {
             region.imageExtent = vk::Extent3D{width, height, 1};
 
             commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, 1, &region);
-
-            endSingleTimeCommands(commandBuffer);
         }
 
         void createBuffer(vk::DeviceSize f_size, vk::BufferUsageFlags f_usage, vk::MemoryPropertyFlags f_properties, vk::Buffer& f_buffer, vk::DeviceMemory& f_bufferMemory) {
