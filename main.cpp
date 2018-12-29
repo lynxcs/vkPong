@@ -1,4 +1,3 @@
-// TODO Built-in shader compilation
 // TODO Use SPIRV-Reflect to fill out pipeline layout
 // TODO Use dedicated transfer queue
 
@@ -1347,6 +1346,7 @@ class application {
             glfwSetFramebufferSizeCallback(m_window, framebufferResizeCallback);
         }
 
+        // TODO Figure out and utilize compiler options
         std::vector<uint32_t> compileShaderToSpirv(const std::string& filename) {
             std::ifstream file(filename, std::ios::ate | std::ios::in);
 
