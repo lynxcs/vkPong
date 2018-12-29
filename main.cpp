@@ -141,6 +141,10 @@ class application {
         };
 
         struct UniformBufferObject {
+            glm::mat4 mvpMatrix;
+        };
+
+        struct MVPMatrixObject {
             glm::mat4 model;
             glm::mat4 view;
             glm::mat4 proj;
@@ -1239,11 +1243,14 @@ class application {
             auto currentTime = std::chrono::high_resolution_clock::now();
             float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
+            MVPMatrixObject mvp = {};
+            mvp.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+            mvp.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+            mvp.proj = glm::perspective(glm::radians(45.0f), m_swapchainExtent.width / (float) m_swapchainExtent.height, 0.1f, 10.0f);
+            mvp.proj[1][1] *= -1;
+
             UniformBufferObject ubo = {};
-            ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-            ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-            ubo.proj = glm::perspective(glm::radians(45.0f), m_swapchainExtent.width / (float) m_swapchainExtent.height, 0.1f, 10.0f);
-            ubo.proj[1][1] *= -1;
+            ubo.mvpMatrix = mvp.proj * mvp.view * mvp.model;
 
             void* data;
             m_device.mapMemory(m_uniformBuffersMemory[f_currentImage], 0, sizeof(ubo), vk::MemoryMapFlags(0), &data);
