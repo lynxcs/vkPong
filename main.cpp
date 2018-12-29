@@ -12,6 +12,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 
+#include <shaderc/shaderc.hpp>
+
 #include <array>
 #include <iostream>
 #include <fstream>
@@ -505,14 +507,11 @@ class application {
         }
 
         void createGraphicsPipeline() {
-            auto vertShaderCode = readFile("shaders/vert.spv");
-            auto fragShaderCode = readFile("shaders/frag.spv");
+            auto vertFile = compileShaderToSpirv("shaders/shader.vert");
+            auto fragFile = compileShaderToSpirv("shaders/shader.frag");
 
-            vk::ShaderModule vertShaderModule;
-            vk::ShaderModule fragShaderModule;
-
-            vertShaderModule = createShaderModule(vertShaderCode);
-            fragShaderModule = createShaderModule(fragShaderCode);
+            auto vertShaderModule = createShaderModule(vertFile);
+            auto fragShaderModule = createShaderModule(fragFile);
 
             vk::PipelineShaderStageCreateInfo vertShaderStageInfo = {};
             vertShaderStageInfo.stage = vk::ShaderStageFlagBits::eVertex;
@@ -637,8 +636,6 @@ class application {
             m_commandPool = m_device.createCommandPool(poolInfo, nullptr);
         }
 
-        // TODO: Create helper functions to record multiple commands and then flush them
-        // E.g: beginSingleTimeCommands() && HelperFunctions && flushSingleTimeCommands()
         void createTextureImage() {
             int texWidth, texHeight, texChannels;
             stbi_uc* pixels = stbi_load("textures/texture.png", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
@@ -1056,9 +1053,10 @@ class application {
             }
         }
 
-        vk::ShaderModule createShaderModule(const std::vector<char>& f_code) {
+        vk::ShaderModule createShaderModule(const std::vector<uint32_t>& f_code) {
             vk::ShaderModuleCreateInfo createInfo = {};
-            createInfo.codeSize = f_code.size();
+
+            createInfo.codeSize = f_code.size() * sizeof(uint32_t);
             createInfo.pCode = reinterpret_cast<const uint32_t*>(f_code.data());
 
             return m_device.createShaderModule(createInfo, nullptr);
@@ -1347,6 +1345,62 @@ class application {
             glfwSetWindowUserPointer(m_window, this);
             glfwSetKeyCallback(m_window, key_callback);
             glfwSetFramebufferSizeCallback(m_window, framebufferResizeCallback);
+        }
+
+        std::vector<uint32_t> compileShaderToSpirv(const std::string& filename) {
+            std::ifstream file(filename, std::ios::ate | std::ios::in);
+
+            if (!file.is_open())
+                throw std::runtime_error("Failed to open file: " + filename + "!");
+
+            size_t fileSize = (size_t) file.tellg();
+            std::vector<char> buffer(fileSize);
+
+            file.seekg(0);
+            file.read(buffer.data(), fileSize);
+            file.close();
+
+            std::vector<uint32_t> spirv;
+            shaderc::Compiler compiler;
+            if (!compiler.IsValid())
+                throw std::runtime_error("Shaderc compiler isn't valid!");
+
+            auto shaderType = determineShaderType(filename);
+            if (shaderType == shaderc_glsl_infer_from_source)
+                throw std::runtime_error("Failed to determine shader type!");
+
+            std::string str(buffer.begin(), buffer.end());
+            auto result = compiler.CompileGlslToSpv(str, shaderType, filename.c_str());
+            if (result.GetCompilationStatus() != shaderc_compilation_status_success)
+            {
+                std::cerr << "Failed shaderc(" << result.GetCompilationStatus() << "): " << result.GetErrorMessage() << std::endl;
+                throw std::runtime_error("Failed to compile shader: " + filename);
+            }
+            spirv.assign(result.cbegin(), result.cend());
+
+            return spirv;
+        }
+
+        shaderc_shader_kind determineShaderType(const std::string& filename) {
+
+            std::string reverseString = filename;
+            std::reverse(reverseString.begin(), reverseString.end());
+            std::string ending = filename.substr(filename.length() - reverseString.find("."));
+
+            if (ending == "vert")
+                return shaderc_vertex_shader;
+            else if (ending == "frag")
+                return shaderc_fragment_shader;
+            else if (ending == "tesc")
+                return shaderc_tess_control_shader;
+            else if (ending == "tese")
+                return shaderc_tess_evaluation_shader;
+            else if (ending == "geom")
+                return shaderc_geometry_shader;
+            else if (ending == "comp")
+                return shaderc_compute_shader;
+
+            return shaderc_shader_kind::shaderc_glsl_infer_from_source;
         }
 };
 
