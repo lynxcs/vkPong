@@ -134,6 +134,9 @@ class application {
         vk::PipelineLayout m_pipelineLayout;
         vk::Pipeline m_graphicsPipeline;
 
+        vk::PipelineLayout m_backgroundPipelineLayout;
+        vk::Pipeline m_backgroundPipeline;
+
         vk::CommandPool m_commandPool;
         std::vector<vk::CommandBuffer> m_commandBuffers;
 
@@ -249,7 +252,10 @@ class application {
             createImageViews();
             createRenderPass();
             createDescriptorSetLayout();
-            createGraphicsPipeline();
+
+            createObjectPipeline();
+            createBackgroundPipeline();
+
             createFramebuffers();
             createCommandPool();
 
@@ -570,7 +576,108 @@ class application {
             m_circleDescriptorSetLayout = m_device.createDescriptorSetLayout(layoutInfo);
         }
 
-        void createGraphicsPipeline() {
+        void createBackgroundPipeline() {
+            auto vertFile = compileShaderToSpirv("shaders/backgroundShader.vert");
+            auto fragFile = compileShaderToSpirv("shaders/backgroundShader.frag");
+
+            auto vertShaderModule = createShaderModule(vertFile);
+            auto fragShaderModule = createShaderModule(fragFile);
+
+            vk::PipelineShaderStageCreateInfo vertShaderStageInfo = {};
+            vertShaderStageInfo.stage = vk::ShaderStageFlagBits::eVertex;
+            vertShaderStageInfo.module = vertShaderModule;
+            vertShaderStageInfo.pName = "main";
+
+            vk::PipelineShaderStageCreateInfo fragShaderStageInfo = {};
+            fragShaderStageInfo.stage = vk::ShaderStageFlagBits::eFragment;
+            fragShaderStageInfo.module = fragShaderModule;
+            fragShaderStageInfo.pName = "main";
+
+            vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+
+            vk::PipelineVertexInputStateCreateInfo emptyInputState = {};
+            emptyInputState.vertexAttributeDescriptionCount = 0;
+            emptyInputState.pVertexAttributeDescriptions = nullptr;
+            emptyInputState.vertexBindingDescriptionCount = 0;
+            emptyInputState.pVertexBindingDescriptions = nullptr;
+
+            vk::PipelineInputAssemblyStateCreateInfo inputAssembly = {};
+            inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+            inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+            vk::Viewport viewport = {0.0, 0.0, (float) m_swapchainExtent.width, (float) m_swapchainExtent.height, 0.0, 1.0};
+            vk::Rect2D scissor = {{0, 0}, m_swapchainExtent};
+
+            vk::PipelineViewportStateCreateInfo viewportState = {};
+            viewportState.viewportCount = 1;
+            viewportState.pViewports = &viewport;
+            viewportState.scissorCount = 1;
+            viewportState.pScissors = &scissor;
+
+            vk::PipelineRasterizationStateCreateInfo rasterizer = {};
+            rasterizer.depthClampEnable = VK_FALSE;
+            rasterizer.rasterizerDiscardEnable = VK_FALSE;
+            rasterizer.polygonMode = vk::PolygonMode::eFill;
+            rasterizer.lineWidth = 1.0f;
+            rasterizer.cullMode = vk::CullModeFlagBits::eFront;
+            rasterizer.frontFace = vk::FrontFace::eCounterClockwise;
+
+            rasterizer.depthBiasEnable = VK_FALSE;
+            rasterizer.depthBiasConstantFactor = 0.0f;
+            rasterizer.depthBiasClamp = 0.0f;
+
+            vk::PipelineMultisampleStateCreateInfo multisampling = {};
+            multisampling.sampleShadingEnable = VK_FALSE;
+            multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
+            multisampling.minSampleShading = 1.0f;
+            multisampling.pSampleMask = nullptr;
+            multisampling.alphaToCoverageEnable = VK_FALSE;
+            multisampling.alphaToOneEnable = VK_FALSE;
+
+            vk::PipelineColorBlendAttachmentState colorBlendAttachment = {};
+            using CCF = vk::ColorComponentFlagBits;
+            colorBlendAttachment.colorWriteMask = CCF::eR | CCF::eG | CCF::eB | CCF::eA;
+            colorBlendAttachment.blendEnable = VK_FALSE;
+
+            vk::PipelineColorBlendStateCreateInfo colorBlending = {};
+            colorBlending.logicOpEnable = VK_FALSE;
+            colorBlending.logicOp = vk::LogicOp::eCopy;
+            colorBlending.attachmentCount = 1;
+            colorBlending.pAttachments = &colorBlendAttachment;
+
+            vk::PipelineLayoutCreateInfo pipelineLayoutInfo = {};
+            pipelineLayoutInfo.setLayoutCount = 0;
+            pipelineLayoutInfo.pSetLayouts = nullptr;
+
+            if (m_device.createPipelineLayout(&pipelineLayoutInfo, nullptr, &m_backgroundPipelineLayout) != vk::Result::eSuccess)
+                throw std::runtime_error("Failed to create pipeline layout!");
+
+            vk::GraphicsPipelineCreateInfo pipelineInfo = {};
+            pipelineInfo.stageCount = 2;
+            pipelineInfo.pStages = shaderStages;
+            
+            pipelineInfo.pVertexInputState = &emptyInputState;
+            pipelineInfo.pInputAssemblyState = &inputAssembly;
+            pipelineInfo.pViewportState = &viewportState;
+            pipelineInfo.pRasterizationState = &rasterizer;
+            pipelineInfo.pMultisampleState = &multisampling;
+            pipelineInfo.pDepthStencilState = nullptr;
+            pipelineInfo.pColorBlendState = &colorBlending;
+            pipelineInfo.pDynamicState = nullptr;
+
+            pipelineInfo.layout = m_backgroundPipelineLayout;
+            pipelineInfo.renderPass = m_renderPass;
+            pipelineInfo.subpass = 0;
+
+            m_backgroundPipeline = m_device.createGraphicsPipeline(nullptr, pipelineInfo);
+            if (!m_backgroundPipeline)
+                throw std::runtime_error("Failed to create pipeline!");
+
+            m_device.destroyShaderModule(fragShaderModule, nullptr);
+            m_device.destroyShaderModule(vertShaderModule, nullptr);
+        }
+
+        void createObjectPipeline() {
             auto vertFile = compileShaderToSpirv("shaders/objectShader.vert");
             auto fragFile = compileShaderToSpirv("shaders/objectShader.frag");
 
@@ -668,6 +775,8 @@ class application {
             pipelineInfo.subpass = 0;
 
             m_graphicsPipeline = m_device.createGraphicsPipeline(nullptr, pipelineInfo, nullptr);
+            if (!m_graphicsPipeline)
+                throw std::runtime_error("Failed to create pipeline!");
 
             m_device.destroyShaderModule(fragShaderModule, nullptr);
             m_device.destroyShaderModule(vertShaderModule, nullptr);
@@ -1130,6 +1239,10 @@ class application {
                 renderPassInfo.pClearValues = &clearColor;
 
                 m_commandBuffers[i].beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
+
+                m_commandBuffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, m_backgroundPipeline);
+                m_commandBuffers[i].draw(3, 1, 0, 0);
+
                 m_commandBuffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline);
 
                 vk::DeviceSize offsets[] = {0};
@@ -1484,7 +1597,7 @@ class application {
             createSwapchain();
             createImageViews();
             createRenderPass();
-            createGraphicsPipeline();
+            createObjectPipeline();
             createFramebuffers();
             createCommandBuffers();
         }
@@ -1499,6 +1612,10 @@ class application {
 
             m_device.destroy(m_graphicsPipeline);
             m_device.destroy(m_pipelineLayout);
+
+            m_device.destroy(m_backgroundPipeline);
+            m_device.destroy(m_backgroundPipelineLayout);
+
             m_device.destroy(m_renderPass);
 
             for (auto imageView : m_swapchainImageViews) {
