@@ -8,21 +8,22 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb/stb_image.h>
-
 #include <shaderc/shaderc.hpp>
 
-#include <array>
 #include <iostream>
-#include <fstream>
 #include <string>
 #include <stdexcept>
 #include <vector>
-#include <optional>
-#include <set>
 #include <algorithm>
+#include <thread>
+
+#include <array>
+#include <set>
+#include <optional>
+#include <fstream>
+
 #include <chrono>
+using namespace std::chrono_literals;
 
 #ifdef NDEBUG
 const bool VALIDATION_LAYERS_ENABLED = false;
@@ -40,11 +41,49 @@ const std::vector<const char*> c_deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
 
+float paddle1Pos = 0.0f;
+float paddle2Pos = 0.0f;
+
+bool keyWPressed = false;
+bool keySPressed = false;
+bool keyUpPressed = false;
+bool keyDownPressed = false;
+
 static void key_callback(GLFWwindow* f_window, int f_key, int f_scancode, int f_action, int f_mods) {
     if (f_key == GLFW_KEY_ESCAPE && f_action == GLFW_PRESS) {
         glfwSetWindowShouldClose(f_window, GLFW_TRUE);
     }
-}
+
+    if (f_key == GLFW_KEY_W && f_action == GLFW_PRESS) {
+        keyWPressed = true;
+    }
+
+    if (f_key == GLFW_KEY_S && f_action == GLFW_PRESS) {
+        keySPressed = true;
+    }
+    if (f_key == GLFW_KEY_UP && f_action == GLFW_PRESS) {
+        keyUpPressed = true;
+    }
+
+    if (f_key == GLFW_KEY_DOWN && f_action == GLFW_PRESS) {
+        keyDownPressed = true;
+    } 
+
+    if (f_key == GLFW_KEY_W && f_action == GLFW_RELEASE) {
+        keyWPressed = false;
+    }
+
+    if (f_key == GLFW_KEY_S && f_action == GLFW_RELEASE) {
+        keySPressed = false;
+    }
+    if (f_key == GLFW_KEY_UP && f_action == GLFW_RELEASE) {
+        keyUpPressed = false;
+    }
+
+    if (f_key == GLFW_KEY_DOWN && f_action == GLFW_RELEASE) {
+        keyDownPressed = false;
+    } 
+};
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -52,22 +91,6 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityF
     void* pUserData) {
     std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
     return VK_FALSE;
-}
-
-static std::vector<char> readFile(const std::string& filename) {
-    std::ifstream file(filename, std::ios::ate | std::ios::binary);
-
-    if (!file.is_open())
-        throw std::runtime_error("Failed to open file: " + filename + "!");
-
-    size_t fileSize = (size_t) file.tellg();
-    std::vector<char> buffer(fileSize);
-
-    file.seekg(0);
-    file.read(buffer.data(), fileSize);
-
-    file.close();
-    return buffer;
 }
 
 class application {
@@ -99,9 +122,14 @@ class application {
 
         vk::RenderPass m_renderPass;
 
-        vk::DescriptorSetLayout m_descriptorSetLayout;
+        vk::DescriptorSetLayout m_rect1DescriptorSetLayout;
+        vk::DescriptorSetLayout m_rect2DescriptorSetLayout;
+        vk::DescriptorSetLayout m_circleDescriptorSetLayout;
+
         vk::DescriptorPool m_descriptorPool;
-        std::vector<vk::DescriptorSet> descriptorSets;
+        std::vector<vk::DescriptorSet> rect1DescriptorSets;
+        std::vector<vk::DescriptorSet> rect2DescriptorSets;
+        std::vector<vk::DescriptorSet> circleDescriptorSets;
 
         vk::PipelineLayout m_pipelineLayout;
         vk::Pipeline m_graphicsPipeline;
@@ -113,19 +141,26 @@ class application {
         std::vector<vk::Semaphore> m_renderFinishedSemaphores;
         std::vector<vk::Fence> m_inFlightFences;
 
-        vk::Buffer m_vertexBuffer;
-        vk::DeviceMemory m_vertexBufferMemory;
+        vk::Buffer m_rectVertexBuffer;
+        vk::DeviceMemory m_rectVertexBufferMemory;
 
-        vk::Buffer m_indexBuffer;
-        vk::DeviceMemory m_indexBufferMemory;
+        vk::Buffer m_rectIndexBuffer;
+        vk::DeviceMemory m_rectIndexBufferMemory;
 
-        std::vector<vk::Buffer> m_uniformBuffers;
-        std::vector<vk::DeviceMemory> m_uniformBuffersMemory;
+        vk::Buffer m_circleVertexBuffer;
+        vk::DeviceMemory m_circleVertexBufferMemory;
 
-        vk::Image m_textureImage;
-        vk::ImageView m_textureImageView;
-        vk::DeviceMemory m_textureImageMemory;
-        vk::Sampler m_textureSampler;
+        vk::Buffer m_circleIndexBuffer;
+        vk::DeviceMemory m_circleIndexBufferMemory;
+
+        std::vector<vk::Buffer> m_circleUniformBuffers;
+        std::vector<vk::DeviceMemory> m_circleUniformBuffersMemory;
+
+        std::vector<vk::Buffer> m_rect1UniformBuffers;
+        std::vector<vk::DeviceMemory> m_rect1UniformBuffersMemory;
+
+        std::vector<vk::Buffer> m_rect2UniformBuffers;
+        std::vector<vk::DeviceMemory> m_rect2UniformBuffersMemory;
 
         int m_currentFrame = 0;
 
@@ -157,9 +192,8 @@ class application {
         };
 
         struct Vertex {
-            glm::vec2 pos;
-            glm::vec3 color;
-            glm::vec2 texCoord;
+            glm::vec2 pos = {0.0f, 0.0f};
+            glm::vec3 color = {1.0f, 1.0f, 1.0f};
 
             static vk::VertexInputBindingDescription getBindingDescription() {
                 vk::VertexInputBindingDescription bindingDescription = {};
@@ -170,8 +204,8 @@ class application {
                 return bindingDescription;
             }
 
-            static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescription() {
-                std::array<vk::VertexInputAttributeDescription, 3> attributeDescriptions = {};
+            static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescription() {
+                std::array<vk::VertexInputAttributeDescription, 2> attributeDescriptions = {};
                 attributeDescriptions[0].binding = 0;
                 attributeDescriptions[0].location = 0;
                 attributeDescriptions[0].format = vk::Format::eR32G32Sfloat;
@@ -182,26 +216,23 @@ class application {
                 attributeDescriptions[1].format = vk::Format::eR32G32B32Sfloat;
                 attributeDescriptions[1].offset = offsetof(Vertex, color);
 
-                attributeDescriptions[2].binding = 0;
-                attributeDescriptions[2].location = 2;
-                attributeDescriptions[2].format = vk::Format::eR32G32Sfloat;
-                attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
-
                 return attributeDescriptions;
             }
         };
 
-        const std::vector<Vertex> c_vertices = {
-            {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-            {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-            {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-            {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
+        const std::vector<Vertex> c_rectVertices = {
+            {{-0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}},
+            {{0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}},
+            {{0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+            {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
         };
 
-        // TODO Calculate these automatically
-        const std::vector<uint16_t> c_indices = {
+        const std::vector<uint16_t> c_rectIndices = {
             0, 1, 2, 2, 3, 0
         };
+
+        std::vector<Vertex> c_circleVertices;
+        std::vector<uint16_t> c_circleIndices;
 
         static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
             auto app = reinterpret_cast<application*>(glfwGetWindowUserPointer(window));
@@ -221,16 +252,52 @@ class application {
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
-            createTextureImage();
-            createTextureImageView();
-            createTextureSampler();
-            createVertexBuffer();
-            createIndexBuffer();
+
+            createCircleMesh();
+            createCircleVertexBuffer();
+            createCircleIndexBuffer();
+
+            createRectVertexBuffer();
+            createRectIndexBuffer();
+
             createUniformBuffers();
             createDescriptorPool();
             createDescriptorSets();
             createCommandBuffers();
             createSyncObjects();
+        }
+
+        void createCircleMesh() {
+            std::vector<Vertex> circleVerts;
+            std::vector<unsigned short> circleIndices;
+            circleVerts.push_back(Vertex{ glm::vec3(0, 0, 0) });
+
+            for (int i = 0; i < 360; ++i)
+            {
+                glm::vec3 vert;
+                //   |   /|
+                //   |  / |
+                //   |-/ <|-- angle i
+                //   |/___|
+                //  opposite = s=o/h sin(i) * hyp = o;
+                //  adj = c=a/h cos(i) * hyp = a;
+                //	|hyp| == 1
+
+                vert.x = sinf((float)i);
+                vert.y = cosf((float)i);
+                vert.z = 0;
+                circleVerts.push_back(Vertex{ vert });
+
+                if (i > 0)
+                {
+                    circleIndices.push_back(0);
+                    circleIndices.push_back(i + 1);
+                    circleIndices.push_back(i);
+                }
+            }
+
+            c_circleVertices = circleVerts;
+            c_circleIndices = circleIndices;
         }
 
         void createInstance() {
@@ -493,25 +560,19 @@ class application {
             uboLayoutBinding.stageFlags = vk::ShaderStageFlagBits::eVertex;
             uboLayoutBinding.pImmutableSamplers = nullptr; // Optional
 
-            // TODO: Maybe also use one in vertex for heightmap?
-            vk::DescriptorSetLayoutBinding samplerLayoutBinding = {};
-            samplerLayoutBinding.binding = 1;
-            samplerLayoutBinding.descriptorCount = 1;
-            samplerLayoutBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-            samplerLayoutBinding.pImmutableSamplers = nullptr;
-            samplerLayoutBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
-
-            std::array<vk::DescriptorSetLayoutBinding, 2> bindings = {uboLayoutBinding, samplerLayoutBinding};
+            std::array<vk::DescriptorSetLayoutBinding, 1> bindings = {uboLayoutBinding};
             vk::DescriptorSetLayoutCreateInfo layoutInfo = {};
             layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
             layoutInfo.pBindings = bindings.data();
 
-            m_descriptorSetLayout = m_device.createDescriptorSetLayout(layoutInfo);
+            m_rect1DescriptorSetLayout = m_device.createDescriptorSetLayout(layoutInfo);
+            m_rect2DescriptorSetLayout = m_device.createDescriptorSetLayout(layoutInfo);
+            m_circleDescriptorSetLayout = m_device.createDescriptorSetLayout(layoutInfo);
         }
 
         void createGraphicsPipeline() {
-            auto vertFile = compileShaderToSpirv("shaders/shader.vert");
-            auto fragFile = compileShaderToSpirv("shaders/shader.frag");
+            auto vertFile = compileShaderToSpirv("shaders/objectShader.vert");
+            auto fragFile = compileShaderToSpirv("shaders/objectShader.frag");
 
             auto vertShaderModule = createShaderModule(vertFile);
             auto fragShaderModule = createShaderModule(fragFile);
@@ -582,8 +643,10 @@ class application {
             colorBlending.pAttachments = &colorBlendAttachment;
 
             vk::PipelineLayoutCreateInfo pipelineLayoutInfo = {};
-            pipelineLayoutInfo.setLayoutCount = 1;
-            pipelineLayoutInfo.pSetLayouts = &m_descriptorSetLayout;
+
+            vk::DescriptorSetLayout layout[] = {m_rect1DescriptorSetLayout,m_rect2DescriptorSetLayout, m_circleDescriptorSetLayout};
+            pipelineLayoutInfo.setLayoutCount = 3;
+            pipelineLayoutInfo.pSetLayouts = layout;
 
             m_pipelineLayout = m_device.createPipelineLayout(pipelineLayoutInfo, nullptr);
 
@@ -637,40 +700,6 @@ class application {
             poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
 
             m_commandPool = m_device.createCommandPool(poolInfo, nullptr);
-        }
-
-        void createTextureImage() {
-            int texWidth, texHeight, texChannels;
-            stbi_uc* pixels = stbi_load("textures/texture.png", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-            vk::DeviceSize imageSize = texWidth * texHeight * 4;
-
-            if (!pixels)
-                throw std::runtime_error("Failed to load texture image!");
-
-            vk::Buffer stagingBuffer;
-            vk::DeviceMemory stagingBufferMemory;
-
-            using BU = vk::BufferUsageFlagBits;
-            using MP = vk::MemoryPropertyFlagBits;
-            createBuffer(imageSize, BU::eTransferSrc, MP::eHostVisible | MP::eHostCoherent, stagingBuffer, stagingBufferMemory);
-
-            void * data;
-            m_device.mapMemory(stagingBufferMemory, 0, imageSize, vk::MemoryMapFlags(0), &data);
-            memcpy(data, pixels, static_cast<size_t>(imageSize));
-            m_device.unmapMemory(stagingBufferMemory);
-
-            stbi_image_free(pixels);
-
-            createImage(texWidth, texHeight, vk::Format::eR8G8B8A8Unorm, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled, vk::MemoryPropertyFlagBits::eDeviceLocal, m_textureImage, m_textureImageMemory);
-
-            vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
-            transitionImageLayout(commandBuffer, m_textureImage, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-            copyBufferToImage(commandBuffer, stagingBuffer, m_textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-            transitionImageLayout(commandBuffer, m_textureImage, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
-            flushSingleTimeCommands(commandBuffer);
-
-            m_device.destroy(stagingBuffer);
-            m_device.free(stagingBufferMemory);
         }
 
         vk::CommandBuffer beginSingleTimeCommands() {
@@ -732,10 +761,6 @@ class application {
             m_device.bindImageMemory(image, imageMemory, 0);
         }
 
-        void createTextureImageView() {
-            m_textureImageView = createImageView(m_textureImage, vk::Format::eR8G8B8A8Unorm);
-        }
-
         vk::ImageView createImageView(vk::Image image, vk::Format format) {
             vk::ImageViewCreateInfo viewInfo = {};
             viewInfo.image = image;
@@ -753,36 +778,11 @@ class application {
             return imageView;
         }
 
-        void createTextureSampler() {
-            vk::SamplerCreateInfo samplerInfo = {};
-            samplerInfo.magFilter = vk::Filter::eLinear;
-            samplerInfo.minFilter = vk::Filter::eLinear;
-
-            samplerInfo.addressModeU = vk::SamplerAddressMode::eRepeat;
-            samplerInfo.addressModeV = vk::SamplerAddressMode::eRepeat;
-            samplerInfo.addressModeW = vk::SamplerAddressMode::eRepeat;
-
-            samplerInfo.anisotropyEnable = VK_TRUE;
-            samplerInfo.maxAnisotropy = 16;
-            samplerInfo.borderColor = vk::BorderColor::eIntOpaqueBlack;
-            samplerInfo.unnormalizedCoordinates = VK_FALSE;
-
-            samplerInfo.compareEnable = VK_FALSE;
-            samplerInfo.compareOp = vk::CompareOp::eAlways;
-
-            samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
-            samplerInfo.mipLodBias = 0.0f;
-            samplerInfo.minLod = 0.0f;
-            samplerInfo.maxLod = 0.0f;
-
-            m_device.createSampler(&samplerInfo, nullptr, &m_textureSampler);
-        }
-
-        void createVertexBuffer() {
+        void createCircleVertexBuffer() {
             using MP_FB = vk::MemoryPropertyFlagBits;
             using BU_FB = vk::BufferUsageFlagBits;
 
-            vk::DeviceSize bufferSize = sizeof(c_vertices[0]) * c_vertices.size();
+            vk::DeviceSize bufferSize = sizeof(c_circleVertices[0]) * c_circleVertices.size();
 
             vk::Buffer stagingBuffer;
             vk::DeviceMemory stagingBufferMemory;
@@ -790,24 +790,24 @@ class application {
 
             void* data;
             m_device.mapMemory(stagingBufferMemory, 0, bufferSize, vk::MemoryMapFlags(0), &data);
-            memcpy(data, c_vertices.data(), (size_t) bufferSize);
+            memcpy(data, c_circleVertices.data(), (size_t) bufferSize);
             m_device.unmapMemory(stagingBufferMemory);
 
-            createBuffer(bufferSize, BU_FB::eTransferDst | BU_FB::eVertexBuffer, MP_FB::eDeviceLocal, m_vertexBuffer, m_vertexBufferMemory);
+            createBuffer(bufferSize, BU_FB::eTransferDst | BU_FB::eVertexBuffer, MP_FB::eDeviceLocal, m_circleVertexBuffer, m_circleVertexBufferMemory);
 
             vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
-            copyBuffer(commandBuffer, stagingBuffer, m_vertexBuffer, bufferSize);
+            copyBuffer(commandBuffer, stagingBuffer, m_circleVertexBuffer, bufferSize);
             flushSingleTimeCommands(commandBuffer);
 
             m_device.destroy(stagingBuffer);
             m_device.freeMemory(stagingBufferMemory);
         }
 
-        void createIndexBuffer() {
+        void createRectVertexBuffer() {
             using MP_FB = vk::MemoryPropertyFlagBits;
             using BU_FB = vk::BufferUsageFlagBits;
 
-            vk::DeviceSize bufferSize = sizeof(c_indices[0]) * c_indices.size();
+            vk::DeviceSize bufferSize = sizeof(c_rectVertices[0]) * c_rectVertices.size();
 
             vk::Buffer stagingBuffer;
             vk::DeviceMemory stagingBufferMemory;
@@ -815,13 +815,63 @@ class application {
 
             void* data;
             m_device.mapMemory(stagingBufferMemory, 0, bufferSize, vk::MemoryMapFlags(0), &data);
-            memcpy(data, c_indices.data(), (size_t) bufferSize);
+            memcpy(data, c_rectVertices.data(), (size_t) bufferSize);
             m_device.unmapMemory(stagingBufferMemory);
 
-            createBuffer(bufferSize, BU_FB::eTransferDst | BU_FB::eIndexBuffer, MP_FB::eDeviceLocal, m_indexBuffer, m_indexBufferMemory);
+            createBuffer(bufferSize, BU_FB::eTransferDst | BU_FB::eVertexBuffer, MP_FB::eDeviceLocal, m_rectVertexBuffer, m_rectVertexBufferMemory);
 
             vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
-            copyBuffer(commandBuffer, stagingBuffer, m_indexBuffer, bufferSize);
+            copyBuffer(commandBuffer, stagingBuffer, m_rectVertexBuffer, bufferSize);
+            flushSingleTimeCommands(commandBuffer);
+
+            m_device.destroy(stagingBuffer);
+            m_device.freeMemory(stagingBufferMemory);
+        }
+
+        void createCircleIndexBuffer() {
+            using MP_FB = vk::MemoryPropertyFlagBits;
+            using BU_FB = vk::BufferUsageFlagBits;
+
+            vk::DeviceSize bufferSize = sizeof(c_circleIndices[0]) * c_circleIndices.size();
+
+            vk::Buffer stagingBuffer;
+            vk::DeviceMemory stagingBufferMemory;
+            createBuffer(bufferSize, BU_FB::eTransferSrc, MP_FB::eHostVisible | MP_FB::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+            void* data;
+            m_device.mapMemory(stagingBufferMemory, 0, bufferSize, vk::MemoryMapFlags(0), &data);
+            memcpy(data, c_circleIndices.data(), (size_t) bufferSize);
+            m_device.unmapMemory(stagingBufferMemory);
+
+            createBuffer(bufferSize, BU_FB::eTransferDst | BU_FB::eIndexBuffer, MP_FB::eDeviceLocal, m_circleIndexBuffer, m_circleIndexBufferMemory);
+
+            vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
+            copyBuffer(commandBuffer, stagingBuffer, m_circleIndexBuffer, bufferSize);
+            flushSingleTimeCommands(commandBuffer);
+
+            m_device.destroy(stagingBuffer);
+            m_device.freeMemory(stagingBufferMemory);
+        }
+
+        void createRectIndexBuffer() {
+            using MP_FB = vk::MemoryPropertyFlagBits;
+            using BU_FB = vk::BufferUsageFlagBits;
+
+            vk::DeviceSize bufferSize = sizeof(c_rectIndices[0]) * c_rectIndices.size();
+
+            vk::Buffer stagingBuffer;
+            vk::DeviceMemory stagingBufferMemory;
+            createBuffer(bufferSize, BU_FB::eTransferSrc, MP_FB::eHostVisible | MP_FB::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+            void* data;
+            m_device.mapMemory(stagingBufferMemory, 0, bufferSize, vk::MemoryMapFlags(0), &data);
+            memcpy(data, c_rectIndices.data(), (size_t) bufferSize);
+            m_device.unmapMemory(stagingBufferMemory);
+
+            createBuffer(bufferSize, BU_FB::eTransferDst | BU_FB::eIndexBuffer, MP_FB::eDeviceLocal, m_rectIndexBuffer, m_rectIndexBufferMemory);
+
+            vk::CommandBuffer commandBuffer = beginSingleTimeCommands();
+            copyBuffer(commandBuffer, stagingBuffer, m_rectIndexBuffer, bufferSize);
             flushSingleTimeCommands(commandBuffer);
 
             m_device.destroy(stagingBuffer);
@@ -924,55 +974,80 @@ class application {
         void createUniformBuffers() {
             vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
 
-            m_uniformBuffers.resize(m_swapchainImages.size());
-            m_uniformBuffersMemory.resize(m_swapchainImages.size());
+            m_rect1UniformBuffers.resize(m_swapchainImages.size());
+            m_rect1UniformBuffersMemory.resize(m_swapchainImages.size());
+
+            m_rect2UniformBuffers.resize(m_swapchainImages.size());
+            m_rect2UniformBuffersMemory.resize(m_swapchainImages.size());
+
+            m_circleUniformBuffers.resize(m_swapchainImages.size());
+            m_circleUniformBuffersMemory.resize(m_swapchainImages.size());
 
             for (size_t i = 0; i < m_swapchainImages.size(); i++) {
-                createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, m_uniformBuffers[i], m_uniformBuffersMemory[i]);
+                createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, m_circleUniformBuffers[i], m_circleUniformBuffersMemory[i]);
+                createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, m_rect1UniformBuffers[i], m_rect1UniformBuffersMemory[i]);
+                createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, m_rect2UniformBuffers[i], m_rect2UniformBuffersMemory[i]);
             }
         }
 
         void createDescriptorPool() {
-            std::array<vk::DescriptorPoolSize, 2> poolSizes = {};
+            std::array<vk::DescriptorPoolSize, 3> poolSizes = {};
             poolSizes[0].type = vk::DescriptorType::eUniformBuffer;
             poolSizes[0].descriptorCount = static_cast<uint32_t>(m_swapchainImages.size());
-            poolSizes[1].type = vk::DescriptorType::eCombinedImageSampler;
+            poolSizes[1].type = vk::DescriptorType::eUniformBuffer;
             poolSizes[1].descriptorCount = static_cast<uint32_t>(m_swapchainImages.size());
+            poolSizes[2].type = vk::DescriptorType::eUniformBuffer;
+            poolSizes[2].descriptorCount = static_cast<uint32_t>(m_swapchainImages.size());
             
             vk::DescriptorPoolCreateInfo poolInfo = {};
             poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
             poolInfo.pPoolSizes = poolSizes.data();
-            poolInfo.maxSets = static_cast<uint32_t>(m_swapchainImages.size());
+            poolInfo.maxSets = static_cast<uint32_t>(m_swapchainImages.size()) * 3;
             poolInfo.flags = vk::DescriptorPoolCreateFlags(0) ;
 
             m_descriptorPool = m_device.createDescriptorPool(poolInfo);
         }
 
         void createDescriptorSets() {
-            std::vector<vk::DescriptorSetLayout> layouts(m_swapchainImages.size(), m_descriptorSetLayout);
+            std::vector<vk::DescriptorSetLayout> rect1Layouts(m_swapchainImages.size(), m_rect1DescriptorSetLayout);
+            std::vector<vk::DescriptorSetLayout> rect2Layouts(m_swapchainImages.size(), m_rect2DescriptorSetLayout);
+            std::vector<vk::DescriptorSetLayout> circleLayouts(m_swapchainImages.size(), m_circleDescriptorSetLayout);
 
-            vk::DescriptorSetAllocateInfo allocInfo = {};
-            allocInfo.descriptorPool = m_descriptorPool;
-            allocInfo.descriptorSetCount = static_cast<uint32_t>(m_swapchainImages.size());
-            allocInfo.pSetLayouts = layouts.data();
+            vk::DescriptorSetAllocateInfo rect1AllocInfo = {};
+            rect1AllocInfo.descriptorPool = m_descriptorPool;
+            rect1AllocInfo.descriptorSetCount = static_cast<uint32_t>(m_swapchainImages.size());
+            rect1AllocInfo.pSetLayouts = rect1Layouts.data();
 
-            descriptorSets.resize(m_swapchainImages.size());
-            m_device.allocateDescriptorSets(&allocInfo, descriptorSets.data());
+            vk::DescriptorSetAllocateInfo rect2AllocInfo = {};
+            rect2AllocInfo.descriptorPool = m_descriptorPool;
+            rect2AllocInfo.descriptorSetCount = static_cast<uint32_t>(m_swapchainImages.size());
+            rect2AllocInfo.pSetLayouts = rect2Layouts.data();
+
+            vk::DescriptorSetAllocateInfo circleAllocInfo = {};
+            circleAllocInfo.descriptorPool = m_descriptorPool;
+            circleAllocInfo.descriptorSetCount = static_cast<uint32_t>(m_swapchainImages.size());
+            circleAllocInfo.pSetLayouts = circleLayouts.data();
+
+            circleDescriptorSets.resize(m_swapchainImages.size());
+            m_device.allocateDescriptorSets(&circleAllocInfo, circleDescriptorSets.data());
+
+            rect1DescriptorSets.resize(m_swapchainImages.size());
+            if (m_device.allocateDescriptorSets(&rect1AllocInfo, rect1DescriptorSets.data()) != vk::Result::eSuccess)
+                throw std::runtime_error("Failed to allocate descriptor set");
+
+            rect2DescriptorSets.resize(m_swapchainImages.size());
+            if (m_device.allocateDescriptorSets(&rect2AllocInfo, rect2DescriptorSets.data()) != vk::Result::eSuccess)
+                throw std::runtime_error("Failed to allocate descriptor set");
 
             for (size_t i = 0; i < m_swapchainImages.size(); i++) {
                 vk::DescriptorBufferInfo bufferInfo = {};
-                bufferInfo.buffer = m_uniformBuffers[i];
+                bufferInfo.buffer = m_rect1UniformBuffers[i];
                 bufferInfo.offset = 0;
                 bufferInfo.range = sizeof(UniformBufferObject);
 
-                vk::DescriptorImageInfo imageInfo = {};
-                imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-                imageInfo.imageView = m_textureImageView;
-                imageInfo.sampler = m_textureSampler;
+                std::array<vk::WriteDescriptorSet, 1> descriptorWrites = {};
 
-                std::array<vk::WriteDescriptorSet, 2> descriptorWrites = {};
-
-                descriptorWrites[0].dstSet = descriptorSets[i];
+                descriptorWrites[0].dstSet = rect1DescriptorSets[i];
                 descriptorWrites[0].dstBinding = 0;
                 descriptorWrites[0].dstArrayElement = 0;
                 descriptorWrites[0].descriptorType = vk::DescriptorType::eUniformBuffer;
@@ -981,14 +1056,45 @@ class application {
                 descriptorWrites[0].pImageInfo = nullptr;
                 descriptorWrites[0].pTexelBufferView = nullptr;
 
-                descriptorWrites[1].dstSet = descriptorSets[i];
-                descriptorWrites[1].dstBinding = 1;
-                descriptorWrites[1].dstArrayElement = 0;
-                descriptorWrites[1].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-                descriptorWrites[1].descriptorCount = 1;
-                descriptorWrites[1].pBufferInfo = nullptr;
-                descriptorWrites[1].pImageInfo = &imageInfo;
-                descriptorWrites[1].pTexelBufferView = nullptr;
+                m_device.updateDescriptorSets(static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+            }
+
+            for (size_t i = 0; i < m_swapchainImages.size(); i++) {
+                vk::DescriptorBufferInfo bufferInfo = {};
+                bufferInfo.buffer = m_rect2UniformBuffers[i];
+                bufferInfo.offset = 0;
+                bufferInfo.range = sizeof(UniformBufferObject);
+
+                std::array<vk::WriteDescriptorSet, 1> descriptorWrites = {};
+
+                descriptorWrites[0].dstSet = rect2DescriptorSets[i];
+                descriptorWrites[0].dstBinding = 0;
+                descriptorWrites[0].dstArrayElement = 0;
+                descriptorWrites[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+                descriptorWrites[0].descriptorCount = 1;
+                descriptorWrites[0].pBufferInfo = &bufferInfo;
+                descriptorWrites[0].pImageInfo = nullptr;
+                descriptorWrites[0].pTexelBufferView = nullptr;
+
+                m_device.updateDescriptorSets(static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+            }
+
+            for (size_t i = 0; i < m_swapchainImages.size(); i++) {
+                vk::DescriptorBufferInfo bufferInfo = {};
+                bufferInfo.buffer = m_circleUniformBuffers[i];
+                bufferInfo.offset = 0;
+                bufferInfo.range = sizeof(UniformBufferObject);
+
+                std::array<vk::WriteDescriptorSet, 1> descriptorWrites = {};
+
+                descriptorWrites[0].dstSet = circleDescriptorSets[i];
+                descriptorWrites[0].dstBinding = 0;
+                descriptorWrites[0].dstArrayElement = 0;
+                descriptorWrites[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+                descriptorWrites[0].descriptorCount = 1;
+                descriptorWrites[0].pBufferInfo = &bufferInfo;
+                descriptorWrites[0].pImageInfo = nullptr;
+                descriptorWrites[0].pTexelBufferView = nullptr;
 
                 m_device.updateDescriptorSets(static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
             }
@@ -1026,13 +1132,23 @@ class application {
                 m_commandBuffers[i].beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
                 m_commandBuffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline);
 
-                vk::Buffer vertexBuffers[] = {m_vertexBuffer};
                 vk::DeviceSize offsets[] = {0};
-                m_commandBuffers[i].bindVertexBuffers(0, 1, vertexBuffers, offsets);
-                m_commandBuffers[i].bindIndexBuffer(m_indexBuffer, 0, vk::IndexType::eUint16);
-                m_commandBuffers[i].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0, 1, &descriptorSets[i], 0, nullptr);
 
-                m_commandBuffers[i].drawIndexed(static_cast<uint32_t>(c_indices.size()), 1, 0, 0, 0);
+                m_commandBuffers[i].bindVertexBuffers(0, 1, &m_circleVertexBuffer, offsets);
+                m_commandBuffers[i].bindIndexBuffer(m_circleIndexBuffer, 0, vk::IndexType::eUint16);
+                m_commandBuffers[i].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0, 1, &circleDescriptorSets[i], 0, nullptr);
+                m_commandBuffers[i].drawIndexed(static_cast<uint32_t>(c_circleIndices.size()), 1, 0, 0, 0);
+
+                m_commandBuffers[i].bindVertexBuffers(0, 1, &m_rectVertexBuffer, offsets);
+                m_commandBuffers[i].bindIndexBuffer(m_rectIndexBuffer, 0, vk::IndexType::eUint16);
+                m_commandBuffers[i].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0, 1, &rect1DescriptorSets[i], 0, nullptr);
+                m_commandBuffers[i].drawIndexed(static_cast<uint32_t>(c_rectIndices.size()), 1, 0, 0, 0);
+
+                m_commandBuffers[i].bindVertexBuffers(0, 1, &m_rectVertexBuffer, offsets);
+                m_commandBuffers[i].bindIndexBuffer(m_rectIndexBuffer, 0, vk::IndexType::eUint16);
+                m_commandBuffers[i].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0, 1, &rect2DescriptorSets[i], 0, nullptr);
+                m_commandBuffers[i].drawIndexed(static_cast<uint32_t>(c_rectIndices.size()), 1, 0, 0, 0);
+
                 m_commandBuffers[i].endRenderPass();
 
                 m_commandBuffers[i].end();
@@ -1173,11 +1289,68 @@ class application {
             return extensions;
         }
 
+
+        /*
+        // Delta time pseudo-code
+        double t = 0.0;
+        double dt = 1 / 60.0;
+        double currentTime = hires_time_in_seconds();
+        while ( !quit )
+        {
+            double newTime = hires_time_in_seconds();
+            double frameTime = newTime - currentTime;
+            currentTime = newTime;
+
+            while ( frameTime > 0.0 )
+            {
+                float deltaTime = min( frameTime, dt );
+                integrate( state, t, deltaTime );
+                frameTime -= deltaTime;
+                t += deltaTime;
+            }
+            render( state );
+        } */
+
         void mainLoop() {
             while (!glfwWindowShouldClose(m_window)) {
                 glfwPollEvents();
+                integrate(0.016);
                 drawFrame();
+                std::this_thread::sleep_for(16ms);
             }
+        }
+
+        glm::vec2 ballVel = glm::vec2(1.0f, 1.0f);
+        glm::vec2 ballPos = glm::vec2(0.0f, 0.0f);
+        void integrate(double f_deltaTime) {
+            float stepSize = 1.0f * f_deltaTime;
+
+            if (keyWPressed)
+                paddle1Pos = std::clamp(paddle1Pos + stepSize, -1.4f, 1.4f);
+
+            if (keySPressed)
+                paddle1Pos = std::clamp(paddle1Pos - stepSize, -1.4f, 1.4f);
+
+            if (keyUpPressed)
+                paddle2Pos = std::clamp(paddle2Pos + stepSize, -1.4f, 1.4f);
+
+            if (keyDownPressed)
+                paddle2Pos = std::clamp(paddle2Pos - stepSize, -1.4f, 1.4f);
+
+            if (ballPos.y + (ballVel.y * f_deltaTime) >= 1.65f)
+                ballVel.y *= -1;
+
+            if (ballPos.y + (ballVel.y * f_deltaTime) <= -1.65f)
+                ballVel.y *= -1;
+
+            if (ballPos.x <= -2.7 && (ballPos.y >= paddle1Pos - 0.45f && ballPos.y <= paddle1Pos + 0.45f))
+                ballVel.x *= -1;
+
+            if (ballPos.x >= 2.7 && (ballPos.y >= paddle2Pos - 0.45f && ballPos.y <= paddle2Pos + 0.45))
+                ballVel.x *= -1;
+
+            ballPos.x = std::clamp(ballPos.x + ballVel.x * f_deltaTime, -2.9, 2.9);
+            ballPos.y = std::clamp(ballPos.y + ballVel.y * f_deltaTime, -1.65, 1.65);
         }
 
         void drawFrame() {
@@ -1238,32 +1411,63 @@ class application {
         }
 
         void updateUniformBuffer(uint32_t f_currentImage) {
-            static auto startTime = std::chrono::high_resolution_clock::now();
+            MVPMatrixObject rect1Mvp = {};
+            MVPMatrixObject rect2Mvp = {};
+            MVPMatrixObject circleMvp = {};
 
-            auto currentTime = std::chrono::high_resolution_clock::now();
-            float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+            UniformBufferObject rect1Ubo = {};
+            UniformBufferObject rect2Ubo = {};
+            UniformBufferObject circleUbo = {};
 
-            MVPMatrixObject mvp = {};
+            glm::mat4 viewMatrix = glm::lookAt(glm::vec3(0.0f, 0.0f, 4.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            glm::mat4 projMatrix = glm::perspective(glm::radians(45.0f), m_swapchainExtent.width / (float) m_swapchainExtent.height, 0.1f, 10.0f);
+            projMatrix[1][1] *= -1;
 
+            // Rectangle 1 uniform buffer
             {
-                glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.0f));
-                glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 1.0f));
-                glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+                glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(-2.8f, paddle1Pos, 0.0f));
+                glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.075f, 0.45f, 1.0f));
+                glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
+                rect1Mvp.model = translation * rotation * scale;
 
-                mvp.model = translation * rotation * scale;
+                rect1Ubo.mvpMatrix = projMatrix * viewMatrix * rect1Mvp.model;
+
+                void* data;
+                m_device.mapMemory(m_rect1UniformBuffersMemory[f_currentImage], 0, sizeof(rect1Ubo), vk::MemoryMapFlags(0), &data);
+                memcpy(data, &rect1Ubo, sizeof(rect1Ubo));
+                m_device.unmapMemory(m_rect1UniformBuffersMemory[f_currentImage]);
             }
 
-            mvp.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-            mvp.proj = glm::perspective(glm::radians(45.0f), m_swapchainExtent.width / (float) m_swapchainExtent.height, 0.1f, 10.0f);
-            mvp.proj[1][1] *= -1;
+            // Rectangle 2 uniform buffer
+            {
+                glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(2.8f, paddle2Pos, 0.0f));
+                glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.075f, 0.45f, 1.0f));
+                glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
+                rect2Mvp.model = translation * rotation * scale;
 
-            UniformBufferObject ubo = {};
-            ubo.mvpMatrix = mvp.proj * mvp.view * mvp.model;
+                rect2Ubo.mvpMatrix = projMatrix * viewMatrix * rect2Mvp.model;
 
-            void* data;
-            m_device.mapMemory(m_uniformBuffersMemory[f_currentImage], 0, sizeof(ubo), vk::MemoryMapFlags(0), &data);
-            memcpy(data, &ubo, sizeof(ubo));
-            m_device.unmapMemory(m_uniformBuffersMemory[f_currentImage]);
+                void* data;
+                m_device.mapMemory(m_rect2UniformBuffersMemory[f_currentImage], 0, sizeof(rect2Ubo), vk::MemoryMapFlags(0), &data);
+                memcpy(data, &rect2Ubo, sizeof(rect2Ubo));
+                m_device.unmapMemory(m_rect2UniformBuffersMemory[f_currentImage]);
+            }
+
+            // Circle uniform buffer
+            {
+                glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(ballPos.x, ballPos.y, 0.0f));
+                glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.05f, 0.05f, 1.0f));
+                /* glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)); */
+                circleMvp.model = translation * scale;
+
+                circleUbo.mvpMatrix = projMatrix * viewMatrix * circleMvp.model;
+
+                void* data;
+                m_device.mapMemory(m_circleUniformBuffersMemory[f_currentImage], 0, sizeof(circleUbo), vk::MemoryMapFlags(0), &data);
+                memcpy(data, &circleUbo, sizeof(circleUbo));
+                m_device.unmapMemory(m_circleUniformBuffersMemory[f_currentImage]);
+            }
+
         }
 
         void recreateSwapchain() {
@@ -1309,25 +1513,32 @@ class application {
 
             cleanupSwapchain();
 
-            m_device.destroy(m_textureSampler);
-            m_device.destroy(m_textureImageView);
-
-            m_device.destroy(m_textureImage);
-            m_device.free(m_textureImageMemory);
-
             m_device.destroy(m_descriptorPool);
 
-            m_device.destroy(m_descriptorSetLayout);
+            m_device.destroy(m_rect1DescriptorSetLayout);
+            m_device.destroy(m_rect2DescriptorSetLayout);
+            m_device.destroy(m_circleDescriptorSetLayout);
             for (size_t i = 0; i < m_swapchainImages.size(); i++) {
-                m_device.destroy(m_uniformBuffers[i]);
-                m_device.free(m_uniformBuffersMemory[i]);
+                m_device.destroy(m_rect1UniformBuffers[i]);
+                m_device.free(m_rect1UniformBuffersMemory[i]);
+                m_device.destroy(m_rect2UniformBuffers[i]);
+                m_device.free(m_rect2UniformBuffersMemory[i]);
+
+                m_device.destroy(m_circleUniformBuffers[i]);
+                m_device.free(m_circleUniformBuffersMemory[i]);
             }
 
-            m_device.destroy(m_indexBuffer);
-            m_device.free(m_indexBufferMemory);
+            m_device.destroy(m_circleIndexBuffer);
+            m_device.free(m_circleIndexBufferMemory);
 
-            m_device.destroy(m_vertexBuffer);
-            m_device.free(m_vertexBufferMemory);
+            m_device.destroy(m_circleVertexBuffer);
+            m_device.free(m_circleVertexBufferMemory);
+
+            m_device.destroy(m_rectIndexBuffer);
+            m_device.free(m_rectIndexBufferMemory);
+
+            m_device.destroy(m_rectVertexBuffer);
+            m_device.free(m_rectVertexBufferMemory);
 
             for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
                 m_device.destroy(m_renderFinishedSemaphores[i]);
@@ -1354,7 +1565,7 @@ class application {
 
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-            m_window = glfwCreateWindow(800, 600, "Vulkan", nullptr, nullptr);
+            m_window = glfwCreateWindow(1280, 720, "vkPong", nullptr, nullptr);
 
             glfwSetWindowUserPointer(m_window, this);
             glfwSetKeyCallback(m_window, key_callback);
