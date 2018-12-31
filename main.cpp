@@ -7,6 +7,7 @@
 #define GLM_FORCE_RADIANS
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/random.hpp>
 
 #include <shaderc/shaderc.hpp>
 
@@ -1425,6 +1426,9 @@ class application {
         } */
 
         void mainLoop() {
+            glm::normalize(ballVel);
+            std::cout << "Ball velocity x: " << ballVel.x << std::endl;
+            std::cout << "Ball velocity y: " << ballVel.y << std::endl;
             while (!glfwWindowShouldClose(m_window)) {
                 glfwPollEvents();
                 integrate(0.016);
@@ -1433,7 +1437,7 @@ class application {
             }
         }
 
-        glm::vec2 ballVel = glm::vec2(1.0f, 1.0f);
+        glm::vec2 ballVel = glm::circularRand(1.0f);
         glm::vec2 ballPos = glm::vec2(0.0f, 0.0f);
         void integrate(double f_deltaTime) {
             float stepSize = 1.0f * f_deltaTime;
@@ -1450,17 +1454,29 @@ class application {
             if (keyDownPressed)
                 paddle2Pos = std::clamp(paddle2Pos - stepSize, -1.4f, 1.4f);
 
-            if (ballPos.y + (ballVel.y * f_deltaTime) >= 1.65f)
+            if (ballPos.y + (ballVel.y * f_deltaTime) >= 1.64f) {
+                ballVel.x *= 1.05;
+                ballVel.y *= 1.005;
                 ballVel.y *= -1;
+            }
 
-            if (ballPos.y + (ballVel.y * f_deltaTime) <= -1.65f)
+            if (ballPos.y + (ballVel.y * f_deltaTime) <= -1.64f) {
+                ballVel.x *= 1.05;
+                ballVel.y *= 1.005;
                 ballVel.y *= -1;
+            }
 
-            if (ballPos.x <= -2.7 && (ballPos.y >= paddle1Pos - 0.45f && ballPos.y <= paddle1Pos + 0.45f))
+            if (ballPos.x <= -2.75f && (ballPos.y >= paddle1Pos - 0.45f && ballPos.y <= paddle1Pos + 0.45f)) {
+                ballVel.x *= 1.1;
+                ballVel.y *= 1.01;
                 ballVel.x *= -1;
+            }
 
-            if (ballPos.x >= 2.7 && (ballPos.y >= paddle2Pos - 0.45f && ballPos.y <= paddle2Pos + 0.45))
+            if (ballPos.x >= 2.75f && (ballPos.y >= paddle2Pos - 0.40f && ballPos.y <= paddle2Pos + 0.40f)) {
+                ballVel.x *= 1.1;
+                ballVel.y *= 1.01;
                 ballVel.x *= -1;
+            }
 
             ballPos.x = std::clamp(ballPos.x + ballVel.x * f_deltaTime, -2.9, 2.9);
             ballPos.y = std::clamp(ballPos.y + ballVel.y * f_deltaTime, -1.65, 1.65);
@@ -1748,8 +1764,9 @@ class application {
 };
 
 int main() {
-    application v_app;
+    srand(time(0));
 
+    application v_app;
     try {
         v_app.run();
     } catch (const std::exception& e) {
