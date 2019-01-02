@@ -2262,11 +2262,13 @@ class application {
             cleanupSwapchain();
 
             m_device.destroy(m_objectDescriptorPool);
+            m_device.destroy(m_textDescriptorPool);
 
             m_device.destroy(m_rect1DescriptorSetLayout);
             m_device.destroy(m_rect2DescriptorSetLayout);
             m_device.destroy(m_circleDescriptorSetLayout);
             m_device.destroy(m_font1DescriptorSetLayout);
+            m_device.destroy(m_font2DescriptorSetLayout);
 
             for (size_t i = 0; i < m_swapchainImages.size(); i++) {
                 m_device.destroy(m_rect1UniformBuffers[i]);
