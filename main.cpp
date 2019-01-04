@@ -1,5 +1,7 @@
 // TODO Use SPIRV-Reflect to fill out pipeline layout
 // TODO Use dedicated transfer queue
+// TODO Use dynamic uniform buffer
+// TODO Use sampler2DArray instead of sampler2D[]
 
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
@@ -35,7 +37,7 @@ const bool VALIDATION_LAYERS_ENABLED = false;
 const bool VALIDATION_LAYERS_ENABLED = true;
 #endif
 
-const int MAX_FRAMES_IN_FLIGHT = 2;
+const int MAX_FRAMES_IN_FLIGHT = 4;
 
 const std::vector<const char*> c_validationLayers = {
     "VK_LAYER_LUNARG_standard_validation"
@@ -1851,7 +1853,7 @@ class application {
         }
 
         vk::PresentModeKHR chooseSwapPresentMode(const std::vector<vk::PresentModeKHR> f_availablePresentModes) {
-            return vk::PresentModeKHR::eFifo;
+            return vk::PresentModeKHR::eImmediate;
             // TODO Sort this out later, for now 60 fps vsync cap is OK
         }
 
@@ -1972,24 +1974,24 @@ class application {
             }
         }
 
-        glm::vec2 ballVel = glm::circularRand(1.0f);
+        glm::vec2 ballVel = glm::circularRand(1.5f);
         glm::vec2 ballPos = glm::vec2(0.0f, 0.0f);
         uint8_t score1 = 0;
         uint8_t score2 = 0;
         void integrate(double f_deltaTime) {
-            float stepSize = 1.0f * f_deltaTime;
+            float stepSize = 1.6f * f_deltaTime;
 
             if (keyWPressed)
-                paddle1Pos = std::clamp(paddle1Pos + stepSize, -1.4f, 1.4f);
+                paddle1Pos = std::clamp(paddle1Pos + stepSize, -1.5f, 1.5f);
 
             if (keySPressed)
-                paddle1Pos = std::clamp(paddle1Pos - stepSize, -1.4f, 1.4f);
+                paddle1Pos = std::clamp(paddle1Pos - stepSize, -1.5f, 1.5f);
 
             if (keyUpPressed)
-                paddle2Pos = std::clamp(paddle2Pos + stepSize, -1.4f, 1.4f);
+                paddle2Pos = std::clamp(paddle2Pos + stepSize, -1.5f, 1.5f);
 
             if (keyDownPressed)
-                paddle2Pos = std::clamp(paddle2Pos - stepSize, -1.4f, 1.4f);
+                paddle2Pos = std::clamp(paddle2Pos - stepSize, -1.5f, 1.5f);
 
             // Bounce of top wall
             if (ballPos.y + (ballVel.y * f_deltaTime) >= 1.64f) {
@@ -2006,36 +2008,36 @@ class application {
             }
 
             // Bounce of left paddle
-            if (ballPos.x <= -2.75f && (ballPos.y >= paddle1Pos - 0.45f && ballPos.y <= paddle1Pos + 0.45f)) {
+            if (ballPos.x <= -2.75f && (ballPos.y >= paddle1Pos - 0.15f && ballPos.y <= paddle1Pos + 0.15f)) {
                 ballVel.x *= 1.1;
                 ballVel.y *= 1.01;
                 ballVel.x *= -1;
             }
 
             // Bounce off right paddle
-            if (ballPos.x >= 2.75f && (ballPos.y >= paddle2Pos - 0.40f && ballPos.y <= paddle2Pos + 0.40f)) {
+            if (ballPos.x >= 2.75f && (ballPos.y >= paddle2Pos - 0.15f && ballPos.y <= paddle2Pos + 0.15f)) {
                 ballVel.x *= 1.1;
                 ballVel.y *= 1.01;
                 ballVel.x *= -1;
             }
 
             // Don't let the ball escape
-            ballPos.x = std::clamp(ballPos.x + ballVel.x * f_deltaTime, -2.9, 2.9);
+            ballPos.x = std::clamp(ballPos.x + ballVel.x * f_deltaTime, -3.0, 3.0);
             ballPos.y = std::clamp(ballPos.y + ballVel.y * f_deltaTime, -1.65, 1.65);
 
-            if (ballPos.x <= -2.8) {
+            if (ballPos.x <= -2.93) {
                 score2 = std::clamp(score2 + 1, 0, 9);
 
                 ballPos.x = 0;
                 ballPos.y = 0;
-                ballVel = glm::circularRand(1.1f * (score1 + score2 + 2)/(2.0));
+                ballVel = glm::circularRand(1.1f * (score1 + score2 + 4)/(4.0));
             }
-            else if (ballPos.x >= 2.8) {
+            else if (ballPos.x >= 2.93) {
                 score1 = std::clamp(score1 + 1, 0, 9);
 
                 ballPos.x = 0;
                 ballPos.y = 0;
-                ballVel = glm::circularRand(1.1f * (score1 + score2 + 2)/2.0);
+                ballVel = glm::circularRand(1.1f * (score1 + score2 + 4)/4.0);
             }
         }
 
@@ -2118,7 +2120,7 @@ class application {
             // Rectangle 1 uniform buffer
             {
                 glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(-2.8f, paddle1Pos, 0.0f));
-                glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.075f, 0.45f, 1.0f));
+                glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.04f, 0.3f, 1.0f));
                 glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
                 rect1Mvp.model = translation * rotation * scale;
 
@@ -2133,7 +2135,7 @@ class application {
             // Rectangle 2 uniform buffer
             {
                 glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(2.8f, paddle2Pos, 0.0f));
-                glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.075f, 0.45f, 1.0f));
+                glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.04f, 0.3f, 1.0f));
                 glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
                 rect2Mvp.model = translation * rotation * scale;
 
@@ -2148,7 +2150,7 @@ class application {
             // Circle uniform buffer
             {
                 glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(ballPos.x, ballPos.y, 0.0f));
-                glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.05f, 0.05f, 1.0f));
+                glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.03f, 0.03f, 1.0f));
                 /* glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)); */
                 circleMvp.model = translation * scale;
 
