@@ -13,5 +13,5 @@ It's like pong, but with vulkan.
 * vulkan
 
 # Todo
-- [] Improve collision detection
-- [] Show win screen
+- [ ] Improve collision detection
+- [ ] Show win screen
